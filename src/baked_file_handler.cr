@@ -10,8 +10,10 @@ require "mime"
 # Precompressed files are only served if they are newer than the original file.
 #
 # NOTE: To use `StaticFileHandler`, you must explicitly import it with `require "http"`
-class HTTP::StaticFileHandler
+class HTTP::BakedFileHandler
   include HTTP::Handler
+  extend BakedFileSystem
+
 
   # In some file systems, using `gz --keep` to compress the file will keep the
   # modification time of the original file but truncating some decimals. We
@@ -21,7 +23,7 @@ class HTTP::StaticFileHandler
   private TIME_DRIFT = 10.milliseconds
 
   @public_dir : Path
-
+  
   # Creates a handler that will serve files in the given *public_dir*, after
   # expanding it (using `File#expand_path`).
   #
