@@ -10,7 +10,7 @@ require "mime"
 # Precompressed files are only served if they are newer than the original file.
 #
 # NOTE: To use `StaticFileHandler`, you must explicitly import it with `require "http"`
-class HTTP::BakedFileHandler
+class HTTP::BakedFileHandler(T)
   include HTTP::Handler
   extend BakedFileSystem
 
@@ -53,105 +53,65 @@ class HTTP::BakedFileHandler
       end
       return
     end
-
     original_path = context.request.path.not_nil!
     is_dir_path = original_path.ends_with?("/")
     request_path = self.request_path(URI.decode(original_path))
-
     # File path cannot contains '\0' (NUL) because all filesystem I know
     # don't accept '\0' character as file name.
     if request_path.includes? '\0'
       context.response.respond_with_status(:bad_request)
       return
     end
-
-    request_path = Path.posix(request_path)
-    expanded_path = request_path.expand("/")
-
-    file_path = @public_dir.join(expanded_path.to_kind(Path::Kind.native))
-    file_info = File.info? file_path
-    is_dir = file_info && file_info.directory?
-    is_file = file_info && file_info.file?
-
-    if request_path != expanded_path || is_dir && !is_dir_path
-      redirect_path = expanded_path
-      if is_dir && !is_dir_path
-        # Append / to path if missing
-        redirect_path = expanded_path.join("")
-      end
-      redirect_to context, redirect_path
-      return
+    if request_path.to_s == "/"
+      request_path = Path.new("/index.html")
     end
-
-    return call_next(context) unless file_info
-
+    request_path = Path.posix(request_path)
     context.response.headers["Accept-Ranges"] = "bytes"
 
-    if @directory_listing && is_dir
+    if @directory_listing && T.get?(request_path.to_s)
       context.response.content_type = "text/html; charset=utf-8"
-      directory_listing(context.response, request_path, file_path)
-    elsif is_file
-      last_modified = file_info.modification_time
-      add_cache_headers(context.response.headers, last_modified)
 
-      if cache_request?(context, last_modified)
-        context.response.status = :not_modified
-        return
-      end
-
-      context.response.content_type = MIME.from_filename(file_path.to_s, "application/octet-stream")
+      context.response.content_type = MIME.from_filename(request_path.to_s, "application/octet-stream")
 
       # Checks if pre-gzipped file can be served
-      if context.request.headers.includes_word?("Accept-Encoding", "gzip")
-        gz_file_path = "#{file_path}.gz"
-
-        if (gz_file_info = File.info?(gz_file_path)) &&
-           last_modified - gz_file_info.modification_time < TIME_DRIFT
-          file_path = gz_file_path
-          file_info = gz_file_info
-          context.response.headers["Content-Encoding"] = "gzip"
+      T.get(request_path.to_s) do |file|
+        if !file
+          return
         end
-      end
-
-      File.open(file_path) do |file|
         if range_header = context.request.headers["Range"]?
           range_header = range_header.lchop?("bytes=")
           unless range_header
-            context.response.headers["Content-Range"] = "bytes */#{file_info.size}"
+            context.response.headers["Content-Range"] = "bytes */#{file.size}"
             context.response.status = :range_not_satisfiable
             context.response.close
             return
           end
 
-          ranges = parse_ranges(range_header, file_info.size)
+          ranges = parse_ranges(range_header, file.size)
           unless ranges
             context.response.respond_with_status :bad_request
             return
           end
 
-          if file_info.size.zero? && ranges.size == 1 && ranges[0].begin.zero?
-            context.response.status = :ok
-            return
-          end
 
           # If any of the ranges start beyond the end of the file, we return an
           # HTTP 416 Range Not Satisfiable.
           # See https://www.rfc-editor.org/rfc/rfc9110.html#section-14.1.2-11.1
-          if ranges.any? { |range| range.begin >= file_info.size }
-            context.response.headers["Content-Range"] = "bytes */#{file_info.size}"
+          if ranges.any? { |range| range.begin >= file.size }
+            context.response.headers["Content-Range"] = "bytes */#{file.size}"
             context.response.status = :range_not_satisfiable
             context.response.close
             return
           end
 
-          ranges.map! { |range| range.begin..(Math.min(range.end, file_info.size - 1)) }
+          ranges.map! { |range| range.begin..(Math.min(range.end, file.size - 1)) }
 
           context.response.status = :partial_content
 
           if ranges.size == 1
             range = ranges.first
             file.seek range.begin
-            context.response.headers["Content-Range"] = "bytes #{range.begin}-#{range.end}/#{file_info.size}"
+            context.response.headers["Content-Range"] = "bytes #{range.begin}-#{range.end}/#{file.size}"
             IO.copy file, context.response, range.size
           else
             MIME::Multipart.build(context.response) do |builder|
@@ -161,7 +121,7 @@ class HTTP::BakedFileHandler
               ranges.each do |range|
                 file.seek range.begin
                 headers = HTTP::Headers{
-                  "Content-Range"  => "bytes #{range.begin}-#{range.end}/#{file_info.size}",
+                  "Content-Range"  => "bytes #{range.begin}-#{range.end}/#{file.size}",
                   "Content-Length" => range.size.to_s,
                 }
                 headers["Content-Type"] = content_type if content_type
@@ -172,7 +132,7 @@ class HTTP::BakedFileHandler
           end
         else
           context.response.status = :ok
-          context.response.content_length = file_info.size
+          context.response.content_length = file.size
           IO.copy(file, context.response)
         end
       end

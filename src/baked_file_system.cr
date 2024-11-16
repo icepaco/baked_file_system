@@ -36,12 +36,12 @@ module BakedFileSystem
   # file.gets_to_end # => "Hello World\n"
   # file.compressed? # => false
   # ```
-  class BakedFile < IO
+  class BakedFile < File
     # Returns the path in the virtual file system.
     getter path : String
 
     # Returns the size of this virtual file.
-    getter size : Int32
+    getter size : Int64
 
     # Returns whether this file is compressed. If not, it is decompressed on read.
     getter? compressed : Bool
@@ -147,6 +147,19 @@ module BakedFileSystem
 
     file.rewind
     file
+  end
+  def get(path : String, &)
+    path = path.strip
+    path = "/" + path unless path.starts_with?("/")
+
+    file = @@files.find do |file|
+      file.path == path
+    end
+
+    if file
+      file.rewind
+      yield file
+    end    
   end
 
   # Returns all virtual files in this file system.
